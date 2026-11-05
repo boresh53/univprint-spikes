@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Spike Konva.js — Benchmark UnivPrint</title>
+<script src="https://cdn.jsdelivr.net/npm/konva@9/konva.min.js"></script>
+<style>
+ body{font-family:system-ui,sans-serif;margin:20px;background:#0c1527;color:#eee}
+ #container{background:#fff}
+ table{border-collapse:collapse;margin-top:12px}
+ td,th{border:1px solid #444;padding:4px 10px;font-size:13px}
+ button{margin:4px;padding:6px 12px;cursor:pointer}
+ #log{white-space:pre-wrap;font-family:monospace;font-size:12px;background:#111;padding:10px;max-height:260px;overflow:auto}
+</style>
+</head>
+<body>
+<h1>Spike moteur graphique — Konva.js 9</h1>
+<p>Même protocole que le spike Fabric.js, pour comparaison directe. Undo/Redo implémenté via un descripteur JSON manuel (Konva ne propose pas de round-trip toJSON/loadFromJSON aussi direct que Fabric pour un layer partiel).</p>
+<div id="container" style="width:800px;height:600px;border:1px solid #444"></div>
+<div>
+ <button onclick="undo()">Undo</button>
+ <button onclick="redo()">Redo</button>
+ <button onclick="exportHQ()">Export PNG 300dpi</button>
+ <button onclick="runFullBenchmark()">Relancer le benchmark complet</button>
+</div>
+<div id="results">Benchmark en cours…</div>
+<pre id="log"></pre>
+<script>
+const stage = new Konva.Stage({container:'container', width:800, height:600});
+const layer = new Konva.Layer();
+stage.add(layer);
+
+let shapesDescriptor = [];
+let history = [];
+let historyIndex = -1;
+
+function log(msg){document.getElementById('log').textContent += msg + "\n";}
+
+function createShape(desc){
+  if(desc.type==='text'){
+    return new Konva.Text({x:desc.x,y:desc.y,text:desc.text,fontSize:14,fill:'#222'});
+  } else {
+    return new Konva.Rect({x:desc.x,y:desc.y,width:40,height:30,fill:'#2D6CDF'});
+  }
+}
+function randomDesc(i){
+  if(i%2===0) return {type:'text', x:Math.random()*700, y:Math.random()*500, text:'Texte '+i};
+  return {type:'rect', x:Math.random()*700, y:Math.random()*500};
+}
+function rebuildLayer(){
+  layer.destroyChildren();
+  shapesDescriptor.forEach(d=> layer.add(createShape(d)));
+  layer.batchDraw();
+}
+function saveState(){
+  history = history.slice(0, historyIndex+1);
+  history.push(JSON.stringify(shapesDescriptor));
+  historyIndex++;
+}
+saveState();
+function undo(){ if(historyIndex<=0) return; historyIndex--; shapesDescriptor = JSON.parse(history[historyIndex]); rebuildLayer(); }
+function redo(){ if(historyIndex>=history.length-1) return; historyIndex++; shapesDescriptor = JSON.parse(history[historyIndex]); rebuildLayer(); }
+
+function measureAdd(n){
+  shapesDescriptor = [];
+  for(let i=0;i<n;i++) shapesDescriptor.push(randomDesc(i));
+  const t0=performance.now();
+  rebuildLayer();
+  const t1=performance.now();
+  saveState();
+  return t1-t0;
+}
+function measureRenderLoop(iterations){
+  const nodes = layer.getChildren();
+  const t0=performance.now();
+  for(let k=0;k<iterations;k++){
+    if(nodes.length) nodes[k%nodes.length].rotation(k%360);
+    layer.batchDraw();
+  }
+  const t1=performance.now();
+  return (t1-t0)/iterations;
+}
+function measureSnapshot(){
+  const t0=performance.now();
+  const json = JSON.stringify(shapesDescriptor);
+  const t1=performance.now();
+  JSON.parse(json);
+  const t2=performance.now();
+  return {serializeMs:t1-t0, size: json.length, parseMs:t2-t1};
+}
+function exportHQ(){
+  shapesDescriptor=[];
+  for(let i=0;i<50;i++) shapesDescriptor.push(randomDesc(i));
+  rebuildLayer();
+  const t0=performance.now();
+  const dataUrl = stage.toDataURL({pixelRatio:3.125});
+  const t1=performance.now();
+  const info = `Export 300dpi (pixelRatio 3.125) : ${(t1-t0).toFixed(1)} ms, poids ≈ ${(dataUrl.length*0.75/1024).toFixed(0)} Ko`;
+  log(info);
+  return {ms:t1-t0, bytes: dataUrl.length*0.75, info};
+}
+function runFullBenchmark(){
+  document.getElementById('log').textContent='';
+  const sizes=[100,500,1000,2000,5000];
+  let rows='<table><tr><th>Nb objets</th><th>Ajout (ms)</th><th>Render/frame (ms)</th><th>FPS estimé</th><th>Snapshot JSON (ms)</th><th>Taille JSON (Ko)</th></tr>';
+  sizes.forEach(n=>{
+    const addMs=measureAdd(n);
+    const frameMs=measureRenderLoop(30);
+    const fps=1000/frameMs;
+    const snap=measureSnapshot();
+    rows+=`<tr><td>${n}</td><td>${addMs.toFixed(1)}</td><td>${frameMs.toFixed(2)}</td><td>${fps.toFixed(0)}</td><td>${snap.serializeMs.toFixed(1)}</td><td>${(snap.size/1024).toFixed(0)}</td></tr>`;
+    log(`N=${n} : add=${addMs.toFixed(1)}ms, frame=${frameMs.toFixed(2)}ms (${fps.toFixed(0)} FPS), snapshot=${snap.serializeMs.toFixed(1)}ms (${(snap.size/1024).toFixed(0)}Ko)`);
+  });
+  rows+='</table>';
+  document.getElementById('results').innerHTML=rows;
+  const exp=exportHQ();
+  document.getElementById('results').innerHTML += `<p><b>Export 300dpi</b> (50 objets) : ${exp.ms.toFixed(1)} ms, poids ≈ ${(exp.bytes/1024).toFixed(0)} Ko</p>`;
+  document.getElementById('results').innerHTML += `<p><b>Poids librairie</b> : konva.min.js 9.x ≈ 145 Ko minifié (jsdelivr, non gzip)</p>`;
+}
+window.addEventListener('load', runFullBenchmark);
+</script>
+</body>
+</html>

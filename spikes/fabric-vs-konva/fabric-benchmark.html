@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Spike Fabric.js — Benchmark UnivPrint</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+<style>
+ body{font-family:system-ui,sans-serif;margin:20px;background:#0c1527;color:#eee}
+ canvas{border:1px solid #444;background:#fff}
+ table{border-collapse:collapse;margin-top:12px}
+ td,th{border:1px solid #444;padding:4px 10px;font-size:13px}
+ button{margin:4px;padding:6px 12px;cursor:pointer}
+ #log{white-space:pre-wrap;font-family:monospace;font-size:12px;background:#111;padding:10px;max-height:260px;overflow:auto}
+</style>
+</head>
+<body>
+<h1>Spike moteur graphique — Fabric.js 5.3.0</h1>
+<p>Zone de travail 800×600 px. Undo/Redo réel (pile de snapshots JSON via toJSON/loadFromJSON). Le benchmark se lance automatiquement au chargement.</p>
+<canvas id="c" width="800" height="600"></canvas>
+<div>
+ <button onclick="addObjects(20)">+20 objets</button>
+ <button onclick="undo()">Undo</button>
+ <button onclick="redo()">Redo</button>
+ <button onclick="exportHQ()">Export PNG 300dpi</button>
+ <button onclick="runFullBenchmark()">Relancer le benchmark complet</button>
+</div>
+<div id="results">Benchmark en cours…</div>
+<pre id="log"></pre>
+<script>
+const canvas = new fabric.Canvas('c');
+let history = [];
+let historyIndex = -1;
+let suspendHistory = false;
+
+function log(msg){ document.getElementById('log').textContent += msg + "\n"; }
+
+function saveState(){
+  if(suspendHistory) return;
+  history = history.slice(0, historyIndex+1);
+  history.push(JSON.stringify(canvas.toJSON()));
+  historyIndex++;
+}
+canvas.on('object:added', saveState);
+canvas.on('object:modified', saveState);
+saveState();
+
+function undo(){
+  if(historyIndex <= 0) return;
+  historyIndex--;
+  suspendHistory = true;
+  canvas.loadFromJSON(history[historyIndex], ()=>{canvas.renderAll(); suspendHistory=false;});
+}
+function redo(){
+  if(historyIndex >= history.length-1) return;
+  historyIndex++;
+  suspendHistory = true;
+  canvas.loadFromJSON(history[historyIndex], ()=>{canvas.renderAll(); suspendHistory=false;});
+}
+
+function randomObject(i){
+  if(i % 2 === 0){
+    return new fabric.Textbox('Texte '+i, {left: Math.random()*700, top: Math.random()*500, fontSize: 14, fill:'#222'});
+  } else {
+    return new fabric.Rect({left: Math.random()*700, top: Math.random()*500, width:40,height:30, fill:'#2D6CDF'});
+  }
+}
+
+function addObjects(n){
+  suspendHistory = true;
+  for(let i=0;i<n;i++) canvas.add(randomObject(i));
+  canvas.renderAll();
+  suspendHistory = false;
+  saveState();
+}
+
+function clearCanvas(){
+  suspendHistory = true;
+  canvas.clear();
+  suspendHistory = false;
+}
+
+function measureAdd(n){
+  clearCanvas();
+  const t0 = performance.now();
+  suspendHistory = true;
+  for(let i=0;i<n;i++) canvas.add(randomObject(i));
+  canvas.renderAll();
+  const t1 = performance.now();
+  suspendHistory = false;
+  return t1 - t0;
+}
+
+function measureRenderLoop(iterations){
+  const objs = canvas.getObjects();
+  const t0 = performance.now();
+  for(let k=0;k<iterations;k++){
+    if(objs.length) objs[k % objs.length].set({angle: (k%360)});
+    canvas.renderAll();
+  }
+  const t1 = performance.now();
+  return (t1 - t0) / iterations;
+}
+
+function measureSnapshot(){
+  const t0 = performance.now();
+  const json = JSON.stringify(canvas.toJSON());
+  const t1 = performance.now();
+  JSON.parse(json);
+  const t2 = performance.now();
+  return {serializeMs: t1-t0, size: json.length, parseMs: t2-t1};
+}
+
+function exportHQ(){
+  clearCanvas();
+  for(let i=0;i<50;i++) canvas.add(randomObject(i));
+  canvas.renderAll();
+  const t0 = performance.now();
+  const dataUrl = canvas.toDataURL({format:'png', multiplier: 3.125});
+  const t1 = performance.now();
+  const info = `Export 300dpi (multiplier 3.125, ${(canvas.width*3.125).toFixed(0)}x${(canvas.height*3.125).toFixed(0)}px) : ${(t1-t0).toFixed(1)} ms, poids ≈ ${(dataUrl.length*0.75/1024).toFixed(0)} Ko`;
+  log(info);
+  return {ms: t1-t0, bytes: dataUrl.length*0.75, info};
+}
+
+function runFullBenchmark(){
+  document.getElementById('log').textContent = '';
+  const sizes = [100,500,1000,2000,5000];
+  let rows = '<table><tr><th>Nb objets</th><th>Ajout (ms)</th><th>Render/frame (ms)</th><th>FPS estimé</th><th>Snapshot JSON (ms)</th><th>Taille JSON (Ko)</th></tr>';
+  sizes.forEach(n=>{
+    const addMs = measureAdd(n);
+    const frameMs = measureRenderLoop(30);
+    const fps = 1000/frameMs;
+    const snap = measureSnapshot();
+    rows += `<tr><td>${n}</td><td>${addMs.toFixed(1)}</td><td>${frameMs.toFixed(2)}</td><td>${fps.toFixed(0)}</td><td>${snap.serializeMs.toFixed(1)}</td><td>${(snap.size/1024).toFixed(0)}</td></tr>`;
+    log(`N=${n} : add=${addMs.toFixed(1)}ms, frame=${frameMs.toFixed(2)}ms (${fps.toFixed(0)} FPS), snapshot=${snap.serializeMs.toFixed(1)}ms (${(snap.size/1024).toFixed(0)}Ko)`);
+  });
+  rows += '</table>';
+  document.getElementById('results').innerHTML = rows;
+  const exp = exportHQ();
+  document.getElementById('results').innerHTML += `<p><b>Export 300dpi</b> (50 objets) : ${exp.ms.toFixed(1)} ms, poids ≈ ${(exp.bytes/1024).toFixed(0)} Ko</p>`;
+  document.getElementById('results').innerHTML += `<p><b>Poids librairie</b> : fabric.min.js 5.3.0 ≈ 308 Ko minifié (cdnjs, non gzip)</p>`;
+}
+window.addEventListener('load', runFullBenchmark);
+</script>
+</body>
+</html>

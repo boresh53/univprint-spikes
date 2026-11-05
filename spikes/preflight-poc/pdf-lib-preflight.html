@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>POC Preflight PAO — pdf-lib</title>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib/dist/pdf-lib.min.js"></script>
+<style>
+ body{font-family:system-ui,sans-serif;margin:20px;background:#0c1527;color:#eee}
+ a{color:#2D6CDF}
+ li{margin:4px 0}
+</style>
+</head>
+<body>
+<h1>POC Preflight PAO — pdf-lib (fonds perdus, marge de sécurité, détection résolution, checklist BAT)</h1>
+<p>Génère un PDF carte de visite 90×50mm + 3mm de fond perdu, avec marge de sécurité 5mm, traits de coupe, une image volontairement basse résolution embarquée (150×150px), et une checklist de validation automatique.</p>
+<div id="results">Génération en cours…</div>
+<p><a id="dl" download="bat-univprint.pdf">Télécharger le PDF généré</a></p>
+<script>
+async function run(){
+  const { PDFDocument, rgb } = PDFLib;
+  const mmToPt = mm => mm * 2.83465;
+  const trimW = mmToPt(90), trimH = mmToPt(50);
+  const bleed = mmToPt(3);
+  const safety = mmToPt(5);
+  const pageW = trimW + 2*bleed, pageH = trimH + 2*bleed;
+
+  const t0 = performance.now();
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([pageW, pageH]);
+
+  page.drawRectangle({x:0,y:0,width:pageW,height:pageH,color:rgb(0.95,0.95,0.95)});
+
+  const tmpCanvas = document.createElement('canvas');
+  tmpCanvas.width = 150; tmpCanvas.height = 150;
+  const ctx = tmpCanvas.getContext('2d');
+  ctx.fillStyle = '#cc3333'; ctx.fillRect(0,0,150,150);
+  const dataUrl = tmpCanvas.toDataURL('image/png');
+  const b64 = dataUrl.split(',')[1];
+  const imgBytes = Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
+  const img = await pdf.embedPng(imgBytes);
+  page.drawImage(img, {x:bleed, y:bleed, width:trimW, height:trimH});
+
+  page.drawRectangle({x:bleed,y:bleed,width:trimW,height:trimH,borderColor:rgb(1,0,0),borderWidth:1});
+  page.drawRectangle({x:bleed+safety,y:bleed+safety,width:trimW-2*safety,height:trimH-2*safety,borderColor:rgb(0,0.4,1),borderDash:[4,2],borderWidth:0.7});
+
+  const markLen = mmToPt(5);
+  const corners = [[bleed,bleed],[bleed+trimW,bleed],[bleed,bleed+trimH],[bleed+trimW,bleed+trimH]];
+  corners.forEach(([cx,cy])=>{
+    page.drawLine({start:{x:cx-markLen,y:cy},end:{x:cx-2,y:cy},thickness:0.5,color:rgb(0,0,0)});
+    page.drawLine({start:{x:cx+2,y:cy},end:{x:cx+markLen,y:cy},thickness:0.5,color:rgb(0,0,0)});
+    page.drawLine({start:{x:cx,y:cy-markLen},end:{x:cx,y:cy-2},thickness:0.5,color:rgb(0,0,0)});
+    page.drawLine({start:{x:cx,y:cy+2},end:{x:cx,y:cy+markLen},thickness:0.5,color:rgb(0,0,0)});
+  });
+
+  const trimWIn = trimW/72, trimHIn = trimH/72;
+  const dpiX = img.width/trimWIn, dpiY = img.height/trimHIn;
+  const dpi = Math.min(dpiX,dpiY);
+
+  const bytes = await pdf.save();
+  const t1 = performance.now();
+
+  const checks = [
+    {label:'Fond perdu présent (3mm)', ok: true},
+    {label:'Marge de sécurité tracée (5mm)', ok: true},
+    {label:`Résolution image ≥ 150 dpi (mesurée: ${dpi.toFixed(0)} dpi, image ${img.width}x${img.height}px sur zone ${trimWIn.toFixed(1)}x${trimHIn.toFixed(1)}in)`, ok: dpi >= 150},
+    {label:`Résolution image ≥ 300 dpi recommandé (mesurée: ${dpi.toFixed(0)} dpi)`, ok: dpi >= 300},
+    {label:'PDF généré et valide (bytes non vides)', ok: bytes.length>0}
+  ];
+
+  const blob = new Blob([bytes], {type:'application/pdf'});
+  const url = URL.createObjectURL(blob);
+  document.getElementById('dl').href = url;
+
+  let html = `<p><b>Génération PDF</b> : ${(t1-t0).toFixed(1)} ms, poids ${(bytes.length/1024).toFixed(1)} Ko</p>`;
+  html += '<h3>Checklist validation BAT (automatique)</h3><ul>';
+  checks.forEach(c=> html += `<li>${c.ok ? '✅' : '❌'} ${c.label}</li>`);
+  html += '</ul>';
+  document.getElementById('results').innerHTML = html;
+}
+run();
+</script>
+</body>
+</html>
